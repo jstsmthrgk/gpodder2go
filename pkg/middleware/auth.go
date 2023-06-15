@@ -7,9 +7,10 @@ import (
 	b64 "encoding/base64"
 	"log"
 	"net/http"
+	"github.com/oxtyped/gpodder2go/pkg/data"
 )
 
-func Verify(key string, noAuth bool) func(http.Handler) http.Handler {
+func Verify(key string, noAuth bool, db data.DataInterface) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		hfn := func(w http.ResponseWriter, r *http.Request) {
@@ -20,36 +21,46 @@ func Verify(key string, noAuth bool) func(http.Handler) http.Handler {
 
 			ck, err := r.Cookie("sessionid")
 			if err != nil {
-				w.WriteHeader(400)
-				log.Println(err)
-				return
-			}
 
-			session, err := b64.StdEncoding.DecodeString(ck.Value)
-			if err != nil {
-				w.WriteHeader(400)
-				log.Println(err)
-				return
-			}
+				username, password, ok := r.BasicAuth()
+				if !ok {
+					w.WriteHeader(401)
+					return
+				}
+				if !db.CheckUserPassword(username, password) {
+					w.WriteHeader(401)
+					return
+				}
 
-			i := bytes.LastIndexByte(session, '.')
-			if i < 0 {
-				w.WriteHeader(400)
-				log.Println("invalid cookie format")
-				return
-			}
+			} else {
 
-			var (
-				sign = session[:i]
-				user = session[i+1:] // FIXME: how to handle usernames with a dot '.' ?
-			)
+				session, err := b64.StdEncoding.DecodeString(ck.Value)
+				if err != nil {
+					w.WriteHeader(400)
+					log.Println(err)
+					return
+				}
 
-			mac := hmac.New(sha256.New, []byte(key))
-			mac.Write(user)
+				i := bytes.LastIndexByte(session, '.')
+				if i < 0 {
+					w.WriteHeader(400)
+					log.Println("invalid cookie format")
+					return
+				}
 
-			if !hmac.Equal([]byte(sign), mac.Sum(nil)) {
-				w.WriteHeader(401)
-				return
+				var (
+					sign = session[:i]
+					user = session[i+1:] // FIXME: how to handle usernames with a dot '.' ?
+				)
+
+				mac := hmac.New(sha256.New, []byte(key))
+				mac.Write(user)
+
+				if !hmac.Equal([]byte(sign), mac.Sum(nil)) {
+					w.WriteHeader(401)
+					return
+
+				}
 
 			}
 
@@ -59,9 +70,9 @@ func Verify(key string, noAuth bool) func(http.Handler) http.Handler {
 	}
 }
 
-func Verifier(key string, noAuth bool) func(http.Handler) http.Handler {
+func Verifier(key string, noAuth bool, db data.DataInterface) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return Verify(key, noAuth)(next)
+		return Verify(key, noAuth, db)(next)
 	}
 }
 
